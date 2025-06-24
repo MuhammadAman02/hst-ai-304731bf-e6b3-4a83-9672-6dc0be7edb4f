@@ -1,151 +1,239 @@
-from typing import Generator, Optional, Dict, Any
-import os
-from contextlib import contextmanager
+"""Database models and initialization for fraud detection system."""
 
-# SQLAlchemy imports are commented out since they're optional dependencies
-# Uncomment these when you need database functionality
-# from sqlalchemy import create_engine, MetaData
-# from sqlalchemy.ext.declarative import declarative_base
-# from sqlalchemy.orm import sessionmaker, Session
+import sqlite3
+import pandas as pd
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import List, Dict, Any, Optional
+import random
+import json
+from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Boolean, Text
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker, Session
+from .config import settings
 
-from app.core.config import settings
-from app.core.logging import app_logger
+# Database setup
+engine = create_engine(settings.DATABASE_URL, echo=settings.DEBUG)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
 
-# This is a placeholder for the SQLAlchemy Base class
-# Uncomment when you need database functionality
-# Base = declarative_base()
-
-# Placeholder for the SQLAlchemy engine
-engine = None
-
-# Placeholder for the SQLAlchemy sessionmaker
-# SessionLocal = None
-
-def setup_database() -> None:
-    """Initialize database connection and session factory.
+class Transaction(Base):
+    """Transaction model for fraud detection."""
+    __tablename__ = "transactions"
     
-    This function should be called at application startup to set up the database connection.
-    It's currently a placeholder - uncomment and modify when you need database functionality.
-    """
-    global engine
-    # global SessionLocal
+    id = Column(Integer, primary_key=True, index=True)
+    transaction_id = Column(String, unique=True, index=True)
+    account_id = Column(String, index=True)
+    amount = Column(Float)
+    transaction_type = Column(String)  # debit, credit, transfer
+    merchant = Column(String)
+    location = Column(String)
+    timestamp = Column(DateTime, default=datetime.utcnow)
+    fraud_score = Column(Float, default=0.0)
+    is_fraud = Column(Boolean, default=False)
+    is_flagged = Column(Boolean, default=False)
+    risk_factors = Column(Text)  # JSON string of risk factors
     
-    # Check if database URL is configured
-    if not settings.database_url or settings.database_url == "sqlite:///./test.db":
-        app_logger.warning("Database URL not configured or using default test database")
-        return
+class Alert(Base):
+    """Alert model for fraud notifications."""
+    __tablename__ = "alerts"
     
+    id = Column(Integer, primary_key=True, index=True)
+    transaction_id = Column(String, index=True)
+    alert_type = Column(String)  # fraud, suspicious, high_risk
+    severity = Column(String)  # low, medium, high, critical
+    message = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    resolved = Column(Boolean, default=False)
+    resolved_at = Column(DateTime)
+    resolved_by = Column(String)
+
+class User(Base):
+    """User model for system access."""
+    __tablename__ = "users"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String, unique=True, index=True)
+    email = Column(String, unique=True, index=True)
+    hashed_password = Column(String)
+    role = Column(String, default="analyst")  # analyst, admin, viewer
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+def init_database():
+    """Initialize database with tables and sample data."""
+    # Create tables
+    Base.metadata.create_all(bind=engine)
+    
+    # Add sample data if database is empty
+    db = SessionLocal()
     try:
-        # Uncomment when you need database functionality
-        # engine = create_engine(
-        #     settings.database_url,
-        #     pool_pre_ping=True,  # Check connection before using from pool
-        #     pool_recycle=3600,   # Recycle connections after 1 hour
-        #     echo=settings.debug, # Log SQL queries in debug mode
-        # )
-        # 
-        # # Create session factory
-        # SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-        # 
-        # app_logger.info(f"Database connection established: {settings.database_url.split('@')[-1]}")
-        pass
-    except Exception as e:
-        app_logger.error(f"Failed to connect to database: {e}")
-        raise
+        if db.query(Transaction).count() == 0:
+            _create_sample_transactions(db)
+        if db.query(User).count() == 0:
+            _create_sample_users(db)
+        db.commit()
+    finally:
+        db.close()
 
-# Uncomment when you need database functionality
-# def get_db() -> Generator[Session, None, None]:
-#     """Get a database session.
-#     
-#     This function is intended to be used as a FastAPI dependency.
-#     
-#     Yields:
-#         SQLAlchemy Session
-#     """
-#     if not SessionLocal:
-#         raise RuntimeError("Database not initialized. Call setup_database() first.")
-#     
-#     db = SessionLocal()
-#     try:
-#         yield db
-#     finally:
-#         db.close()
+def _create_sample_transactions(db: Session):
+    """Create sample transaction data for demonstration."""
+    irish_merchants = [
+        "Tesco Ireland", "SuperValu", "Dunnes Stores", "Penneys", "Brown Thomas",
+        "Boots Ireland", "Argos Ireland", "Harvey Norman", "DID Electrical",
+        "Centra", "Spar", "Circle K", "Applegreen", "Insomnia Coffee",
+        "Eddie Rockets", "Supermacs", "AIB ATM", "Bank of Ireland ATM",
+        "Ulster Bank ATM", "Permanent TSB ATM", "An Post", "Vodafone Ireland",
+        "Three Ireland", "Eir", "Sky Ireland", "Electric Ireland", "Bord Gáis"
+    ]
+    
+    irish_locations = [
+        "Dublin", "Cork", "Galway", "Limerick", "Waterford", "Kilkenny",
+        "Wexford", "Sligo", "Drogheda", "Dundalk", "Bray", "Navan",
+        "Ennis", "Tralee", "Carlow", "Naas", "Athlone", "Letterkenny",
+        "Tullamore", "Killarney", "Arklow", "Cobh", "Midleton", "Bandon"
+    ]
+    
+    # Generate 1000 sample transactions
+    transactions = []
+    for i in range(1000):
+        # 95% normal transactions, 5% fraudulent
+        is_fraud = random.random() < 0.05
+        
+        # Base transaction
+        base_time = datetime.now() - timedelta(days=random.randint(0, 30))
+        
+        if is_fraud:
+            # Fraudulent transaction patterns
+            amount = random.choice([
+                random.uniform(500, 2000),  # High amounts
+                random.uniform(1, 50),      # Small amounts (card testing)
+                random.uniform(2000, 5000)  # Very high amounts
+            ])
+            # Unusual times (late night/early morning)
+            hour = random.choice([2, 3, 4, 23, 0, 1])
+            timestamp = base_time.replace(hour=hour, minute=random.randint(0, 59))
+            fraud_score = random.uniform(0.7, 1.0)
+        else:
+            # Normal transaction patterns
+            amount = random.uniform(5, 500)
+            # Normal business hours
+            hour = random.randint(8, 22)
+            timestamp = base_time.replace(hour=hour, minute=random.randint(0, 59))
+            fraud_score = random.uniform(0.0, 0.3)
+        
+        risk_factors = {
+            "unusual_time": is_fraud and hour in [2, 3, 4, 23, 0, 1],
+            "high_amount": amount > 1000,
+            "new_merchant": random.random() < 0.1,
+            "unusual_location": random.random() < 0.05,
+            "velocity_check": random.random() < 0.1
+        }
+        
+        transaction = Transaction(
+            transaction_id=f"TXN{i+1:06d}",
+            account_id=f"ACC{random.randint(1000, 9999)}",
+            amount=round(amount, 2),
+            transaction_type=random.choice(["debit", "credit", "transfer"]),
+            merchant=random.choice(irish_merchants),
+            location=random.choice(irish_locations),
+            timestamp=timestamp,
+            fraud_score=round(fraud_score, 3),
+            is_fraud=is_fraud,
+            is_flagged=fraud_score > 0.5,
+            risk_factors=json.dumps(risk_factors)
+        )
+        transactions.append(transaction)
+    
+    db.add_all(transactions)
 
-# @contextmanager
-# def get_db_context() -> Generator[Session, None, None]:
-#     """Get a database session as a context manager.
-#     
-#     This function is intended to be used with the 'with' statement.
-#     
-#     Yields:
-#         SQLAlchemy Session
-#     """
-#     if not SessionLocal:
-#         raise RuntimeError("Database not initialized. Call setup_database() first.")
-#     
-#     db = SessionLocal()
-#     try:
-#         yield db
-#     finally:
-#         db.close()
+def _create_sample_users(db: Session):
+    """Create sample users for system access."""
+    from passlib.context import CryptContext
+    
+    pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+    
+    users = [
+        User(
+            username="admin",
+            email="admin@irishbank.ie",
+            hashed_password=pwd_context.hash("admin123"),
+            role="admin"
+        ),
+        User(
+            username="analyst",
+            email="analyst@irishbank.ie", 
+            hashed_password=pwd_context.hash("analyst123"),
+            role="analyst"
+        ),
+        User(
+            username="viewer",
+            email="viewer@irishbank.ie",
+            hashed_password=pwd_context.hash("viewer123"),
+            role="viewer"
+        )
+    ]
+    
+    db.add_all(users)
 
-# def create_tables() -> None:
-#     """Create all tables defined in SQLAlchemy models.
-#     
-#     This function should be called at application startup to create tables
-#     that don't exist yet. It's safe to call this function multiple times.
-#     """
-#     if not engine:
-#         app_logger.warning("Database not initialized. Call setup_database() first.")
-#         return
-#     
-#     try:
-#         # Create tables
-#         Base.metadata.create_all(bind=engine)
-#         app_logger.info("Database tables created")
-#     except Exception as e:
-#         app_logger.error(f"Failed to create database tables: {e}")
-#         raise
+def get_db_session():
+    """Get database session."""
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
-# def get_table_names() -> list[str]:
-#     """Get a list of all table names in the database.
-#     
-#     Returns:
-#         List of table names
-#     """
-#     if not engine:
-#         app_logger.warning("Database not initialized. Call setup_database() first.")
-#         return []
-#     
-#     try:
-#         # Get table names
-#         metadata = MetaData()
-#         metadata.reflect(bind=engine)
-#         return list(metadata.tables.keys())
-#     except Exception as e:
-#         app_logger.error(f"Failed to get table names: {e}")
-#         return []
-
-# def execute_raw_sql(sql: str, params: Optional[Dict[str, Any]] = None) -> list[Dict[str, Any]]:
-#     """Execute a raw SQL query.
-#     
-#     Args:
-#         sql: SQL query string
-#         params: Optional parameters for the SQL query
-#         
-#     Returns:
-#         List of dictionaries with query results
-#     """
-#     if not engine:
-#         app_logger.warning("Database not initialized. Call setup_database() first.")
-#         return []
-#     
-#     try:
-#         with engine.connect() as connection:
-#             result = connection.execute(sql, params or {})
-#             return [dict(row) for row in result]
-#     except Exception as e:
-#         app_logger.error(f"Failed to execute SQL query: {e}")
-#         app_logger.debug(f"SQL query: {sql}")
-#         app_logger.debug(f"SQL params: {params}")
-#         raise
+def get_sample_data() -> Dict[str, Any]:
+    """Get sample data for dashboard display."""
+    db = SessionLocal()
+    try:
+        # Get recent transactions
+        recent_transactions = db.query(Transaction).order_by(
+            Transaction.timestamp.desc()
+        ).limit(100).all()
+        
+        # Get fraud statistics
+        total_transactions = db.query(Transaction).count()
+        fraud_transactions = db.query(Transaction).filter(Transaction.is_fraud == True).count()
+        flagged_transactions = db.query(Transaction).filter(Transaction.is_flagged == True).count()
+        
+        # Get recent alerts
+        recent_alerts = db.query(Alert).order_by(
+            Alert.created_at.desc()
+        ).limit(50).all()
+        
+        return {
+            "transactions": [
+                {
+                    "id": t.transaction_id,
+                    "account": t.account_id,
+                    "amount": t.amount,
+                    "merchant": t.merchant,
+                    "location": t.location,
+                    "timestamp": t.timestamp.isoformat(),
+                    "fraud_score": t.fraud_score,
+                    "is_fraud": t.is_fraud,
+                    "is_flagged": t.is_flagged
+                } for t in recent_transactions
+            ],
+            "stats": {
+                "total_transactions": total_transactions,
+                "fraud_transactions": fraud_transactions,
+                "flagged_transactions": flagged_transactions,
+                "fraud_rate": round((fraud_transactions / total_transactions) * 100, 2) if total_transactions > 0 else 0
+            },
+            "alerts": [
+                {
+                    "id": a.id,
+                    "transaction_id": a.transaction_id,
+                    "type": a.alert_type,
+                    "severity": a.severity,
+                    "message": a.message,
+                    "created_at": a.created_at.isoformat(),
+                    "resolved": a.resolved
+                } for a in recent_alerts
+            ]
+        }
+    finally:
+        db.close()
