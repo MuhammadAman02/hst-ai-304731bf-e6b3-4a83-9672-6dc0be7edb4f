@@ -1,4 +1,12 @@
-# This file makes the 'app' directory a Python package.
-# It can be used for package-level initializations if needed in the future.
-# For the current NiceGUI setup, project_base/main.py directly imports app.main
-# to ensure NiceGUI pages are registered before ui.run() is called.
+"""
+Irish Bank Fraud Detection System
+=================================
+
+A comprehensive fraud detection system designed for Irish banking institutions.
+Provides real-time transaction monitoring, ML-based fraud detection, and 
+compliance reporting features.
+"""
+
+__version__ = "1.0.0"
+__author__ = "HST AI Python Engineer"
+__description__ = "Production-ready fraud detection system for Irish banks"
