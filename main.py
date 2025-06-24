@@ -1,102 +1,127 @@
+"""
+Irish Bank Fraud Detection System
+=================================
+
+Production-ready fraud detection system with:
+✓ Real-time transaction monitoring and fraud detection
+✓ Machine learning-based risk assessment engine
+✓ Professional banking-grade dashboard with integrated imagery
+✓ Comprehensive alert management and notification system
+✓ Irish banking compliance features and reporting
+✓ Secure authentication with role-based access control
+✓ Advanced transaction analysis and visualization tools
+✓ Zero-configuration deployment with sample data
+
+Features:
+- Real-time fraud detection with ML models
+- Interactive transaction monitoring dashboard
+- Risk scoring and alert management
+- Compliance reporting for Irish banking regulations
+- Professional security-focused UI/UX
+- Sample transaction data for immediate demonstration
+"""
+
 import os
 import sys
-from dotenv import load_dotenv
-from nicegui import ui
+from pathlib import Path
+import asyncio
+from datetime import datetime, timedelta
+import logging
 
-# Load environment variables from .env file (if present)
-load_dotenv()
+# Add the project root to Python path
+project_root = Path(__file__).parent
+sys.path.insert(0, str(project_root))
 
-# Import the page definitions from app.main
-# This ensures that the @ui.page decorators in app/main.py are executed
-# and the routes are registered with NiceGUI before ui.run() is called.
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('fraud_detection.log'),
+        logging.StreamHandler()
+    ]
+)
+
+logger = logging.getLogger(__name__)
+
 try:
-    import app.main  # noqa: F401 -> Ensure app.main is imported to register pages
-except ImportError as e:
-    print(f"Error importing app.main: {e}")
-    print("Make sure the app directory is properly set up.")
-    sys.exit(1)
-
-if __name__ in {"__main__", "__mp_main__"}: # Recommended by NiceGUI for multiprocessing compatibility
-    try:
-        # Import core modules
-        from app.core import (
-            settings, 
-            app_logger, 
-            setup_logging,
-            setup_middleware, 
-            setup_routers, 
-            validate_environment,
-            setup_error_handlers,
-            HealthCheck,
-            is_healthy
+    from nicegui import ui, app
+    from app.core.config import settings
+    from app.core.database import init_database, get_sample_data
+    from app.core.fraud_engine import FraudDetectionEngine
+    from app.core.assets import IrishBankAssetManager
+    from app.services.auth_service import AuthService
+    from app.services.transaction_service import TransactionService
+    from app.services.alert_service import AlertService
+    from app.frontend.dashboard import create_dashboard
+    from app.frontend.auth import create_login_page
+    from app.frontend.components import setup_theme
+    
+    # Initialize services
+    auth_service = AuthService()
+    transaction_service = TransactionService()
+    alert_service = AlertService()
+    fraud_engine = FraudDetectionEngine()
+    asset_manager = IrishBankAssetManager()
+    
+    # Setup theme and assets
+    setup_theme()
+    
+    # Initialize database with sample data
+    init_database()
+    
+    @ui.page('/')
+    async def index():
+        """Main dashboard page with authentication check."""
+        if not auth_service.is_authenticated():
+            ui.navigate.to('/login')
+            return
+        
+        await create_dashboard(
+            transaction_service=transaction_service,
+            alert_service=alert_service,
+            fraud_engine=fraud_engine,
+            asset_manager=asset_manager
         )
+    
+    @ui.page('/login')
+    async def login():
+        """Login page for system access."""
+        await create_login_page(auth_service)
+    
+    @ui.page('/logout')
+    async def logout():
+        """Logout and redirect to login."""
+        auth_service.logout()
+        ui.navigate.to('/login')
+    
+    # Start background fraud detection
+    async def start_fraud_monitoring():
+        """Start the fraud detection monitoring in background."""
+        logger.info("Starting fraud detection monitoring...")
+        await fraud_engine.start_monitoring(transaction_service, alert_service)
+    
+    # Schedule fraud monitoring to start after UI is ready
+    app.on_startup(start_fraud_monitoring)
+    
+    if __name__ in {"__main__", "__mp_main__"}:
+        logger.info(f"Starting {settings.APP_NAME} v{settings.VERSION}")
+        logger.info("Irish Bank Fraud Detection System initializing...")
         
-        # Set up logging
-        setup_logging()
-        app_logger.info(f"Starting {settings.app_name} v{settings.app_version}")
-        
-        # Create FastAPI app
-        from fastapi import FastAPI, APIRouter
-        app = FastAPI(
-            title=settings.app_name,
-            description=settings.app_description,
-            version=settings.app_version,
-            docs_url=f"{settings.api_prefix}/docs" if settings.api_prefix else "/docs",
-            redoc_url=f"{settings.api_prefix}/redoc" if settings.api_prefix else "/redoc",
-        )
-        
-        # Set up error handlers
-        setup_error_handlers(app)
-        
-        # Set up middleware
-        setup_middleware(app)
-        
-        # Set up routers
-        setup_routers(app, api_prefix=settings.api_prefix)
-        
-        # Add health check endpoint
-        health_router = APIRouter()
-        
-        @health_router.get("/health")
-        async def health_check():
-            return HealthCheck.check_all()
-        
-        app.include_router(health_router)
-        
-        # Validate environment
-        errors = validate_environment()
-        if errors:
-            for error in errors:
-                app_logger.error(f"Environment validation error: {error}")
-        
-        # Optional: Set up database if configured
-        try:
-            from app.core import setup_database
-            setup_database()
-        except (ImportError, AttributeError):
-            app_logger.info("Database not configured, skipping setup")
-        
-        # Run the application
-        app_logger.info(f"Starting server at {settings.host}:{settings.port}")
         ui.run(
-            host=settings.host,
-            port=settings.port,
-            title=settings.app_name,
-            uvicorn_logging_level='info' if settings.debug else 'warning',
-            reload=settings.debug,  # IMPORTANT: Set to False for production/deployment
-            app=app,
-            storage_secret=settings.secret_key,  # Use the same secret key for session storage
+            title=settings.APP_NAME,
+            host=settings.HOST,
+            port=settings.PORT,
+            reload=settings.DEBUG,
+            show=settings.DEBUG,
+            storage_secret=settings.SECRET_KEY
         )
-    except Exception as e:
-        # Import traceback here to avoid circular imports
-        import traceback
-        
-        # Try to use app_logger if available, otherwise fall back to print
-        try:
-            app_logger.critical(f"Error starting application: {e}")
-            app_logger.critical(traceback.format_exc())
-        except NameError:
-            print(f"CRITICAL ERROR: {e}")
-            print(traceback.format_exc())
-        
-        sys.exit(1)
+
+except ImportError as e:
+    logger.error(f"Import error: {e}")
+    print(f"Error: Missing required dependencies. Please install requirements: {e}")
+    sys.exit(1)
+except Exception as e:
+    logger.critical(f"Critical error starting application: {e}")
+    print(f"Critical error: {e}")
+    sys.exit(1)
